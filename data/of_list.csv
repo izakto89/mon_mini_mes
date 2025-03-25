@@ -1,4 +1,4 @@
-OF,Description,Statut,Duree_prevue
-OF001,Pièce A,En attente,60
-OF002,Pièce B,En attente,120
-OF003,Pièce C,En attente,45
+OF,Description,Statut
+OF001,Pièce A,En attente
+OF002,Pièce B,En attente
+OF003,Pièce C,En attente
