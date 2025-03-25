@@ -1,13 +1,11 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
 import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime
 
-# -------------------------------------------------------------
-# 1) Config & fichiers CSV
-# -------------------------------------------------------------
+# -------------------------
+# 1) Fichiers CSV
+# -------------------------
 OF_CSV = "data/of_list.csv"
 EVENTS_CSV = "data/events.csv"
 
@@ -26,277 +24,275 @@ def save_of_data(df):
 def save_events_data(df):
     df.to_csv(EVENTS_CSV, index=False)
 
-# -------------------------------------------------------------
-# 2) Calculer debut, fin, progression, etc.
-# -------------------------------------------------------------
-def compute_times_and_progress(df_of, df_events):
+# -----------------------------------------------------
+# 2) Générer les intervalles (Production / Arrêt)
+# -----------------------------------------------------
+def build_intervals_for_OF(of_id, df_events):
     """
-    Ajoute :
-      - 'start_dt' : date/heure du dernier "Début OF"
-      - 'end_dt'   : date/heure du dernier "Fin OF" ou 'now' si En cours
-      - 'progress' : % d'avancement par rapport à Duree_prevue
-    Duree_prevue = minutes ou heures (à clarifier). Pour l'exemple, on suppose minutes.
+    À partir de tous les events de l'OF (triés), on construit
+    des segments de "Production" ou d'"Arrêt".
+    On renvoie un DataFrame avec colonnes :
+      - 'OF'
+      - 'type_intervalle' (Production ou Arrêt)
+      - 'start'
+      - 'end'
+      - 'commentaire' (surtout pour les arrêts)
     """
-    df_of["start_dt"] = pd.NaT
-    df_of["end_dt"] = pd.NaT
-    df_of["progress"] = 0.0
+    # Filtrons les événements de cet OF, triés par timestamp
+    events = df_events[df_events["OF"] == of_id].copy()
+    events["timestamp_dt"] = pd.to_datetime(events["timestamp"], errors="coerce")
+    events = events.sort_values("timestamp_dt")
 
-    df_of["Duree_prevue"] = pd.to_numeric(df_of["Duree_prevue"], errors="coerce").fillna(0)
+    intervals = []
+    current_mode = None  # soit "Production", soit "Arrêt"
+    current_start = None
+    current_comment = ""
 
-    # Convertir les timestamps en datetime
-    df_events["timestamp_dt"] = pd.to_datetime(df_events["timestamp"], errors="coerce")
+    for idx, ev in events.iterrows():
+        evt_type = ev["evenement"]      # e.g. "Début Prod", "Début Arrêt", "Fin Arrêt", "Fin OF"
+        evt_time = ev["timestamp_dt"]
+        evt_com  = ev["commentaire"]
 
-    for i, row in df_of.iterrows():
-        of_id = row["OF"]
-        statut = row["Statut"]
-        duree_prevue = row["Duree_prevue"]
+        if evt_type == "Début Prod":
+            # On clôture l'intervalle précédent (s'il y en a un)
+            if current_mode is not None and current_start is not None:
+                intervals.append({
+                    "OF": of_id,
+                    "type_intervalle": current_mode,
+                    "start": current_start,
+                    "end": evt_time,
+                    "commentaire": current_comment
+                })
+            # On ouvre un nouvel intervalle en mode "Production"
+            current_mode = "Production"
+            current_start = evt_time
+            current_comment = ""
 
-        # Récupérer tous les events de cet OF
-        subset = df_events[df_events["OF"] == of_id].sort_values("timestamp_dt")
+        elif evt_type == "Début Arrêt":
+            # Clôturer la production en cours
+            if current_mode == "Production" and current_start is not None:
+                intervals.append({
+                    "OF": of_id,
+                    "type_intervalle": "Production",
+                    "start": current_start,
+                    "end": evt_time,
+                    "commentaire": ""
+                })
+            # Ouvrir un intervalle "Arrêt"
+            current_mode = "Arrêt"
+            current_start = evt_time
+            current_comment = ""  # on le renseignera peut-être à la fin
 
-        # Dernier "Début OF"
-        debuts = subset[subset["evenement"] == "Début OF"]
-        last_start_dt = None
-        if not debuts.empty:
-            last_start_dt = debuts.iloc[-1]["timestamp_dt"]
+        elif evt_type == "Fin Arrêt":
+            # Clôturer l'Arrêt
+            if current_mode == "Arrêt" and current_start is not None:
+                intervals.append({
+                    "OF": of_id,
+                    "type_intervalle": "Arrêt",
+                    "start": current_start,
+                    "end": evt_time,
+                    "commentaire": evt_com  # le commentaire saisi à la fin
+                })
+            # Repasser en production
+            current_mode = "Production"
+            current_start = evt_time
+            current_comment = ""
 
-        # Dernier "Fin OF"
-        fins = subset[subset["evenement"] == "Fin OF"]
-        last_end_dt = None
-        if not fins.empty:
-            last_end_dt = fins.iloc[-1]["timestamp_dt"]
+        elif evt_type == "Fin OF":
+            # Clôturer l'intervalle en cours (que ce soit Prod ou Arrêt)
+            if current_mode is not None and current_start is not None:
+                intervals.append({
+                    "OF": of_id,
+                    "type_intervalle": current_mode,
+                    "start": current_start,
+                    "end": evt_time,
+                    "commentaire": ""
+                })
+            # Plus rien en cours
+            current_mode = None
+            current_start = None
+            current_comment = ""
 
-        if last_start_dt is not None:
-            df_of.at[i, "start_dt"] = last_start_dt
+    # S'il reste un intervalle ouvert à la fin (OF non terminé), on le ferme maintenant
+    # (optionnel, selon votre logique)
+    # if current_mode is not None and current_start is not None:
+    #     intervals.append({
+    #         "OF": of_id,
+    #         "type_intervalle": current_mode,
+    #         "start": current_start,
+    #         "end": datetime.now(),
+    #         "commentaire": current_comment
+    #     })
 
-            if statut == "Terminé" and last_end_dt is not None:
-                df_of.at[i, "end_dt"] = last_end_dt
-            elif statut == "En cours":
-                df_of.at[i, "end_dt"] = datetime.now()
+    df_intervals = pd.DataFrame(intervals)
+    return df_intervals
 
-            # Calculer la progression
-            start_val = df_of.at[i, "start_dt"]
-            end_val = df_of.at[i, "end_dt"]
-            if pd.notna(start_val) and pd.notna(end_val) and duree_prevue > 0:
-                delta = end_val - start_val
-                delta_minutes = delta.total_seconds() / 60.0  # on suppose minutes
-                progress_pct = (delta_minutes / duree_prevue) * 100
-                if progress_pct > 100:
-                    progress_pct = 100
-                df_of.at[i, "progress"] = progress_pct
-
-    return df_of
-
-# -------------------------------------------------------------
-# 3) Page : Déclaration temps réel
-# -------------------------------------------------------------
+# -----------------------------------------------------
+# 3) Page "Déclaration temps réel"
+# -----------------------------------------------------
 def page_declaration():
-    st.header("Déclaration en temps réel")
+    st.header("Déclaration temps réel : Production / Arrêts")
 
     df_of = load_of_data()
     df_events = load_events_data()
 
-    # Sélection d'un OF
-    of_list = df_of["OF"].unique()
-    selected_of = st.selectbox("Sélectionner un OF", of_list)
+    # 3.1 - Sélection d'un OF
+    all_of = df_of["OF"].unique()
+    selected_of = st.selectbox("Sélectionner un OF", all_of)
 
-    # Statut actuel
-    statut_actuel = df_of.loc[df_of["OF"] == selected_of, "Statut"].values[0]
-    st.write(f"Statut actuel : **{statut_actuel}**")
+    # Récupérer statut
+    statut = df_of.loc[df_of["OF"] == selected_of, "Statut"].values[0]
+    st.write(f"Statut actuel : **{statut}**")
 
-    if st.button("Démarrer l'OF"):
-        new_event = {
-            "timestamp": datetime.now().isoformat(timespec='seconds'),
-            "OF": selected_of,
-            "evenement": "Début OF",
-            "commentaire": ""
-        }
-        df_new = pd.DataFrame([new_event])
-        df_events = pd.concat([df_events, df_new], ignore_index=True)
+    # 3.2 - Boutons selon le statut
+    if statut == "En attente":
+        # Bouton => Début Prod
+        if st.button("Démarrer l'OF"):
+            new_event = {
+                "timestamp": datetime.now().isoformat(timespec='seconds'),
+                "OF": selected_of,
+                "evenement": "Début Prod",
+                "commentaire": ""
+            }
+            df_events = pd.concat([df_events, pd.DataFrame([new_event])], ignore_index=True)
+            # Statut => En cours
+            df_of.loc[df_of["OF"] == selected_of, "Statut"] = "En cours"
 
-        df_of.loc[df_of["OF"] == selected_of, "Statut"] = "En cours"
+            save_of_data(df_of)
+            save_events_data(df_events)
+            st.success(f"OF {selected_of} est maintenant en cours.")
 
-        save_of_data(df_of)
-        save_events_data(df_events)
+    elif statut == "En cours":
+        colA, colB = st.columns(2)
+        if colA.button("Déclarer un Arrêt"):
+            new_event = {
+                "timestamp": datetime.now().isoformat(timespec='seconds'),
+                "OF": selected_of,
+                "evenement": "Début Arrêt",
+                "commentaire": ""
+            }
+            df_events = pd.concat([df_events, pd.DataFrame([new_event])], ignore_index=True)
+            # Statut => En arrêt
+            df_of.loc[df_of["OF"] == selected_of, "Statut"] = "En arrêt"
 
-        st.success(f"L'OF {selected_of} est lancé (En cours).")
+            save_of_data(df_of)
+            save_events_data(df_events)
+            st.warning(f"OF {selected_of} est maintenant en arrêt.")
 
-    if st.button("Terminer l'OF"):
-        new_event = {
-            "timestamp": datetime.now().isoformat(timespec='seconds'),
-            "OF": selected_of,
-            "evenement": "Fin OF",
-            "commentaire": ""
-        }
-        df_new = pd.DataFrame([new_event])
-        df_events = pd.concat([df_events, df_new], ignore_index=True)
+        if colB.button("Terminer l'OF"):
+            new_event = {
+                "timestamp": datetime.now().isoformat(timespec='seconds'),
+                "OF": selected_of,
+                "evenement": "Fin OF",
+                "commentaire": ""
+            }
+            df_events = pd.concat([df_events, pd.DataFrame([new_event])], ignore_index=True)
+            # Statut => Terminé
+            df_of.loc[df_of["OF"] == selected_of, "Statut"] = "Terminé"
 
-        df_of.loc[df_of["OF"] == selected_of, "Statut"] = "Terminé"
+            save_of_data(df_of)
+            save_events_data(df_events)
+            st.success(f"OF {selected_of} est terminé.")
 
-        save_of_data(df_of)
-        save_events_data(df_events)
+    elif statut == "En arrêt":
+        # Bouton => Fin Arrêt (oblige à saisir un commentaire)
+        comment = st.text_input("Commentaire de fin d'arrêt (raison, solution, etc.)")
+        if st.button("Fin d'Arrêt"):
+            if not comment.strip():
+                st.error("Veuillez saisir un commentaire avant de reprendre la production.")
+            else:
+                new_event = {
+                    "timestamp": datetime.now().isoformat(timespec='seconds'),
+                    "OF": selected_of,
+                    "evenement": "Fin Arrêt",
+                    "commentaire": comment
+                }
+                df_events = pd.concat([df_events, pd.DataFrame([new_event])], ignore_index=True)
+                # Statut => En cours
+                df_of.loc[df_of["OF"] == selected_of, "Statut"] = "En cours"
 
-        st.success(f"L'OF {selected_of} est terminé.")
+                save_of_data(df_of)
+                save_events_data(df_events)
+                st.success(f"L'arrêt est terminé. L'OF {selected_of} reprend en production.")
 
-    st.subheader("Déclarer un arrêt (défaut, etc.)")
-    arret_choice = st.selectbox("Type d'arrêt", ["Qualité", "Manque de charge", "Manque personnel", "Réunion", "Formation"])
-    commentaire_arret = st.text_input("Commentaire (facultatif)")
+    elif statut == "Terminé":
+        st.info("Cet OF est terminé. Aucune action disponible.")
 
-    if st.button("Enregistrer l'arrêt"):
-        new_event = {
-            "timestamp": datetime.now().isoformat(timespec='seconds'),
-            "OF": selected_of,
-            "evenement": arret_choice,
-            "commentaire": commentaire_arret
-        }
-        df_new = pd.DataFrame([new_event])
-        df_events = pd.concat([df_events, df_new], ignore_index=True)
+    # -----------------------------------------------------
+    # 3.3 - Affichage de la timeline (prod/arrêt) pour l'OF sélectionné
+    # -----------------------------------------------------
+    st.subheader("Timeline de l'OF (Production vs Arrêt)")
+    df_intervals = build_intervals_for_OF(selected_of, df_events)
 
-        save_of_data(df_of)
-        save_events_data(df_events)
-
-        st.success(f"Arrêt '{arret_choice}' enregistré pour l'OF {selected_of}.")
-
-# -------------------------------------------------------------
-# 4) Page : Tableau de bord (Kanban, KPIs, Gantt, Pareto)
-# -------------------------------------------------------------
-def page_dashboard():
-    st.header("Tableau de bord de production")
-
-    df_of = load_of_data()
-    df_events = load_events_data()
-
-    # Calcul des colonnes start_dt, end_dt, progress
-    df_of = compute_times_and_progress(df_of, df_events)
-
-    # --------------------------
-    # 4.1 - Quelques KPIs (en haut)
-    # --------------------------
-    # Nombre d'OF "En cours"
-    nb_en_cours = (df_of["Statut"] == "En cours").sum()
-    # Nombre d'OF "Terminé"
-    nb_termine = (df_of["Statut"] == "Terminé").sum()
-    # Progression moyenne (sur tous les OF qui sont "En cours" ou "Terminé")
-    df_with_progress = df_of[df_of["Statut"].isin(["En cours", "Terminé"])]
-    if len(df_with_progress) > 0:
-        avg_progress = df_with_progress["progress"].mean()
+    if df_intervals.empty:
+        st.info("Aucun segment de production ou d'arrêt à afficher (OF pas encore démarré).")
     else:
-        avg_progress = 0
+        # On utilise Plotly Express pour un Gantt coloré
+        # 'type_intervalle' = "Production" ou "Arrêt"
+        # On veut "Arrêt" en rouge et "Production" en vert
+        color_map = {
+            "Production": "green",
+            "Arrêt": "red"
+        }
 
-    # Nombre d'arrêts total
-    df_arrets = df_events[~df_events["evenement"].isin(["Début OF", "Fin OF"])]
-    nb_arrets = len(df_arrets)
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("OF en cours", nb_en_cours)
-    col2.metric("OF terminés", nb_termine)
-    col3.metric("Progression moy.", f"{avg_progress:3.0f}%")
-    col4.metric("Nb arrêts", nb_arrets)
-
-    st.markdown("---")
-
-    # --------------------------
-    # 4.2 - Diagramme de Gantt interactif (Plotly)
-    # --------------------------
-    st.subheader("Timeline Gantt")
-
-    df_gantt = df_of.dropna(subset=["start_dt", "end_dt"]).copy()
-    if df_gantt.empty:
-        st.info("Aucun OF avec start_dt et end_dt pour tracer le Gantt.")
-    else:
-        # Convertir en datetime
-        df_gantt["start_dt"] = pd.to_datetime(df_gantt["start_dt"])
-        df_gantt["end_dt"] = pd.to_datetime(df_gantt["end_dt"])
-
-        fig_gantt = px.timeline(
-            df_gantt,
-            x_start="start_dt",
-            x_end="end_dt",
+        fig = px.timeline(
+            df_intervals,
+            x_start="start",
+            x_end="end",
             y="OF",
-            color="Statut",
-            hover_data=["Description", "progress"],
+            color="type_intervalle",
+            color_discrete_map=color_map,
+            hover_data=["commentaire"]
         )
-        fig_gantt.update_yaxes(autorange="reversed")
-        fig_gantt.update_layout(
-            title="Gantt des OF",
+        fig.update_yaxes(autorange="reversed")
+        fig.update_layout(
+            title=f"Timeline pour l'OF {selected_of}",
             xaxis_title="Temps",
             yaxis_title="OF",
-            legend_title="Statut",
+            legend_title="Mode"
         )
-        st.plotly_chart(fig_gantt, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("---")
+        # -------------------------------------------------
+        # 3.4 - Occurrences des arrêts : liste + durées
+        # -------------------------------------------------
+        st.subheader("Occurrences des arrêts pour cet OF")
+        df_arrets = df_intervals[df_intervals["type_intervalle"] == "Arrêt"].copy()
+        if df_arrets.empty:
+            st.info("Aucun arrêt enregistré pour cet OF.")
+        else:
+            # Calcul de la durée de chaque arrêt (minutes)
+            df_arrets["start_dt"] = pd.to_datetime(df_arrets["start"])
+            df_arrets["end_dt"]   = pd.to_datetime(df_arrets["end"])
+            df_arrets["duree_min"] = (df_arrets["end_dt"] - df_arrets["start_dt"]).dt.total_seconds() / 60.0
 
-    # --------------------------
-    # 4.3 - Pareto des arrêts
-    # --------------------------
-    st.subheader("Pareto des arrêts")
+            st.write("Tableau des arrêts :")
+            st.table(
+                df_arrets[["start", "end", "duree_min", "commentaire"]]
+                .rename(columns={
+                    "start": "Début",
+                    "end": "Fin",
+                    "duree_min": "Durée (min)",
+                    "commentaire": "Commentaire"
+                })
+            )
 
-    pareto = (df_arrets
-              .groupby("evenement")["timestamp"]
-              .count()
-              .reset_index(name="count")
-              .sort_values("count", ascending=False))
-    if pareto.empty:
-        st.info("Aucun arrêt pour l'instant.")
-    else:
-        # Affichage en tableau
-        st.write(pareto)
+# -----------------------------------------------------
+# 4) Page "Dashboard" (facultatif)
+# -----------------------------------------------------
+def page_dashboard():
+    st.header("Dashboard global (facultatif)")
+    st.info("Ici, vous pouvez afficher un Kanban global, un Pareto, etc. Ce n'est pas le focus actuel.")
 
-        fig_pareto, ax = plt.subplots()
-        ax.bar(pareto["evenement"], pareto["count"])
-        ax.set_xlabel("Type d'arrêt")
-        ax.set_ylabel("Occurrences")
-        ax.set_title("Pareto des causes d'arrêts")
-        st.pyplot(fig_pareto)
-
-    st.markdown("---")
-
-    # --------------------------
-    # 4.4 - Affichage d'un gauge (indicatif) pour la progression moyenne
-    # --------------------------
-    st.subheader("Gauge de la progression moyenne")
-
-    fig_gauge = go.Figure(
-        go.Indicator(
-            mode="gauge+number",
-            value=avg_progress,
-            title={"text": "Progression moyenne (%)"},
-            gauge={
-                "axis": {"range": [0, 100]},
-                "bar": {"color": "green"},
-            },
-            domain={"x": [0, 1], "y": [0, 1]}
-        )
-    )
-    st.plotly_chart(fig_gauge, use_container_width=False)
-
-    st.markdown("---")
-
-    # --------------------------
-    # 4.5 - Kanban détaillé (table)
-    # --------------------------
-    st.subheader("Kanban détaillé")
-    statuts = df_of["Statut"].unique()
-    for s in statuts:
-        st.write(f"### {s}")
-        subset = df_of[df_of["Statut"] == s].copy()
-        subset["progress"] = subset["progress"].round(1).astype(str) + " %"
-        st.table(subset[["OF", "Description", "Duree_prevue", "progress"]])
-
-# -------------------------------------------------------------
-# 5) main : navigation
-# -------------------------------------------------------------
+# -----------------------------------------------------
+# 5) main : appli Streamlit
+# -----------------------------------------------------
 def main():
     st.set_page_config(layout="wide")
-    st.title("Mini-MES : Suivi de Production (visuel avancé)")
+    st.title("Mini-MES : Production & Arrêts alternés")
 
-    menu = st.sidebar.selectbox("Menu", [
-        "Déclaration temps réel",
-        "Tableau de bord"
-    ])
-
-    if menu == "Déclaration temps réel":
+    choice = st.sidebar.selectbox("Menu", ["Déclaration temps réel", "Dashboard (optionnel)"])
+    if choice == "Déclaration temps réel":
         page_declaration()
     else:
         page_dashboard()
