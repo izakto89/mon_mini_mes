@@ -3,13 +3,17 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-# 1) Les chemins vers nos fichiers CSV
-OF_CSV = "data/of_list.csv"
-EVENTS_CSV = "data/events.csv"
+# ---------------------------
+# 1) Paramètres de fichiers CSV
+# ---------------------------
+OF_CSV = "data/of_list.csv"       # Liste des OF
+EVENTS_CSV = "data/events.csv"    # Historique des événements (début, fin, arrêts, etc.)
 
-# 2) Fonctions pour charger et sauvegarder les données
+# ---------------------------
+# 2) Fonctions pour lire et sauvegarder
+# ---------------------------
 def load_of_data():
-    """Charge la liste des OF."""
+    """Charge la liste d'OF depuis le CSV."""
     return pd.read_csv(OF_CSV)
 
 def load_events_data():
@@ -17,31 +21,69 @@ def load_events_data():
     try:
         return pd.read_csv(EVENTS_CSV)
     except FileNotFoundError:
-        # Si le fichier n'existe pas encore, renvoie un DataFrame vide avec les colonnes voulues
+        # Si le fichier events.csv n'existe pas encore,
+        # on renvoie un DataFrame vide avec les colonnes voulues
         return pd.DataFrame(columns=["timestamp", "OF", "evenement", "commentaire"])
 
 def save_of_data(df):
-    """Sauvegarde la liste des OF."""
+    """Sauvegarde la liste d'OF dans le CSV."""
     df.to_csv(OF_CSV, index=False)
 
 def save_events_data(df):
-    """Sauvegarde l'historique des événements."""
+    """Sauvegarde l'historique dans le CSV."""
     df.to_csv(EVENTS_CSV, index=False)
 
-# 3) Page "Déclaration" : démarrer, terminer, déclarer un arrêt, etc.
+# ---------------------------
+# 3) Calculer le temps écoulé pour les OF "En cours"
+# ---------------------------
+from datetime import datetime
+
+def compute_in_progress_time(df_of, df_events):
+    """
+    Pour chaque OF en statut "En cours", on calcule le temps (en minutes)
+    écoulé depuis le dernier "Début OF" jusqu'à maintenant.
+    On stocke ce temps dans une colonne 'Temps_en_cours'.
+    Les OF qui ne sont pas "En cours" auront un champ vide.
+    """
+    df_of["Temps_en_cours"] = ""  # On crée la colonne (vide par défaut)
+
+    for i, row in df_of.iterrows():
+        if row["Statut"] == "En cours":
+            # Récupérer tous les événements de cet OF, triés par date
+            events_of = df_events[df_events["OF"] == row["OF"]].sort_values("timestamp")
+            # Trouver le dernier "Début OF"
+            starts = events_of[events_of["evenement"] == "Début OF"]
+            if not starts.empty:
+                # On prend le plus récent "Début OF"
+                last_start_ts = starts.iloc[-1]["timestamp"]
+                dt_start = pd.to_datetime(last_start_ts)
+                dt_now = datetime.now()
+
+                # Durée en minutes
+                delta = dt_now - dt_start
+                minutes_in_progress = delta.total_seconds() / 60
+
+                # On arrondit à 1 décimale par exemple
+                df_of.at[i, "Temps_en_cours"] = f"{minutes_in_progress:.1f} min"
+        # Sinon, OF n'est pas "En cours", on laisse Temps_en_cours vide
+    return df_of
+
+# ---------------------------
+# 4) Page "Déclaration" : Démarrer, Terminer, Arrêts
+# ---------------------------
 def page_declaration():
     st.header("Déclaration en temps réel")
 
     df_of = load_of_data()
     df_events = load_events_data()
 
-    # Liste déroulante pour sélectionner un OF
+    # Sélection d'un OF
     of_list = df_of["OF"].unique()
     selected_of = st.selectbox("Sélectionner un OF", of_list)
 
-    # Récupérer le statut actuel de l'OF
+    # Récupérer statut actuel
     statut_actuel = df_of.loc[df_of["OF"] == selected_of, "Statut"].values[0]
-    st.write(f"Statut actuel : **{statut_actuel}**")
+    st.write(f"Statut actuel de l'OF {selected_of} : **{statut_actuel}**")
 
     # Bouton "Démarrer l'OF"
     if st.button("Démarrer l'OF"):
@@ -51,17 +93,17 @@ def page_declaration():
             "evenement": "Début OF",
             "commentaire": ""
         }
-        # Remplacer append par concat
+        # Au lieu de append (déprécié), on fait un concat
         df_new_event = pd.DataFrame([new_event])
         df_events = pd.concat([df_events, df_new_event], ignore_index=True)
 
-        # Mettre à jour le statut de l'OF
+        # Mettre à jour l'OF en "En cours"
         df_of.loc[df_of["OF"] == selected_of, "Statut"] = "En cours"
 
         # Sauvegarder
-        save_events_data(df_events)
         save_of_data(df_of)
-        st.success(f"OF {selected_of} démarré.")
+        save_events_data(df_events)
+        st.success(f"L'OF {selected_of} est maintenant en cours.")
 
     # Bouton "Terminer l'OF"
     if st.button("Terminer l'OF"):
@@ -74,64 +116,76 @@ def page_declaration():
         df_new_event = pd.DataFrame([new_event])
         df_events = pd.concat([df_events, df_new_event], ignore_index=True)
 
-        # Changer le statut en "Terminé"
+        # Mettre l'OF en "Terminé"
         df_of.loc[df_of["OF"] == selected_of, "Statut"] = "Terminé"
 
-        save_events_data(df_events)
         save_of_data(df_of)
-        st.success(f"OF {selected_of} terminé.")
+        save_events_data(df_events)
+        st.success(f"L'OF {selected_of} est terminé.")
 
-    # Section "Déclarer un arrêt de production"
-    st.subheader("Déclarer un arrêt de production")
+    # Section : Déclarer un arrêt (défaut)
+    st.subheader("Déclarer un arrêt ou défaut")
     arret_choice = st.selectbox("Type d'arrêt", ["Qualité", "Manque de charge", "Manque personnel", "Réunion", "Formation"])
-    commentaire_arret = st.text_input("Commentaire (raison, détail)")
+    commentaire_arret = st.text_input("Commentaire (facultatif)")
 
-    if st.button("Enregistrer cet arrêt"):
+    if st.button("Enregistrer l'arrêt"):
         new_event = {
             "timestamp": datetime.now().isoformat(timespec='seconds'),
             "OF": selected_of,
-            "evenement": arret_choice,
+            "evenement": arret_choice,   # ex: "Qualité"
             "commentaire": commentaire_arret
         }
         df_new_event = pd.DataFrame([new_event])
         df_events = pd.concat([df_events, df_new_event], ignore_index=True)
 
-        # Mettre le statut à "En pause" (ou autre statut de votre choix)
-        df_of.loc[df_of["OF"] == selected_of, "Statut"] = "En pause"
+        # NOTE : On ne change PLUS le statut de l'OF (on le laisse "En cours")
+        # df_of.loc[df_of["OF"] == selected_of, "Statut"] = "En pause"  <-- supprimé
 
-        save_events_data(df_events)
         save_of_data(df_of)
-        st.success(f"Arrêt '{arret_choice}' enregistré pour l'OF {selected_of}.")
+        save_events_data(df_events)
+        st.success(f"Arrêt '{arret_choice}' enregistré pour l'OF {selected_of} (statut inchangé).")
 
-# 4) Page "Kanban & Performance"
+# ---------------------------
+# 5) Page "Kanban & Performance"
+# ---------------------------
 def page_kanban_et_pareto():
     st.header("Vue Kanban & Performance")
 
     df_of = load_of_data()
     df_events = load_events_data()
 
-    # Petit Kanban : on affiche les OF par statut
-    st.subheader("Kanban des OF")
+    # Calculer la durée "en cours" (pour chaque OF qui est en statut "En cours")
+    df_of = compute_in_progress_time(df_of, df_events)
+
+    # Afficher un Kanban basique
+    st.subheader("Kanban des OF (statut + durée en cours)")
+
     statuts = df_of["Statut"].unique()
     for s in statuts:
-        st.write(f"### {s}")
+        st.write(f"### Statut : {s}")
         subset = df_of[df_of["Statut"] == s]
-        st.write(subset[["OF", "Description"]])
 
-    # Pareto des arrêts
+        # On affiche les colonnes OF, Description, Temps_en_cours
+        # (Comme ça, si c'est "En cours", on voit la durée)
+        st.write(subset[["OF", "Description", "Temps_en_cours"]])
+
+    # Afficher un Pareto des arrêts
     st.subheader("Pareto des arrêts")
-    # On filtre tout ce qui n'est pas "Début OF" ou "Fin OF"
+    # Filtrons tout ce qui n'est pas 'Début OF' ou 'Fin OF'
     df_arrets = df_events[~df_events["evenement"].isin(["Début OF", "Fin OF"])]
 
-    # On compte le nombre d'occurrences par type d'arrêt
-    pareto = df_arrets.groupby("evenement")["timestamp"].count().reset_index(name="count").sort_values("count", ascending=False)
+    pareto = (df_arrets
+              .groupby("evenement")["timestamp"]
+              .count()
+              .reset_index(name="count")
+              .sort_values("count", ascending=False))
 
     if pareto.empty:
         st.info("Aucun arrêt déclaré pour le moment.")
     else:
         st.write(pareto)
 
-        # On fait un petit graphique en barres
+        # Petit histogramme
         fig, ax = plt.subplots()
         ax.bar(pareto["evenement"], pareto["count"])
         ax.set_xlabel("Type d'arrêt")
@@ -139,7 +193,9 @@ def page_kanban_et_pareto():
         ax.set_title("Pareto des causes d'arrêts")
         st.pyplot(fig)
 
-# 5) Point d'entrée principal : menu de navigation
+# ---------------------------
+# 6) Navigation principale
+# ---------------------------
 def main():
     st.title("Mini-MES : Suivi de Production")
     page = st.sidebar.selectbox("Navigation", ["Déclaration temps réel", "Kanban & Performance"])
