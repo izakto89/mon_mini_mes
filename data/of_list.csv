@@ -1,4 +1,4 @@
-OF,Description,Statut
-OF001,Pièce A,En attente
-OF002,Pièce B,En attente
-OF003,Pièce C,En attente
+OF,Description,Statut,Machine,QtePrevue,QteRealisee
+OF001,Pièce A,En attente,Machine1,100,0
+OF002,Pièce B,En attente,Machine2,200,0
+OF003,Pièce C,En attente,Machine1,50,0
