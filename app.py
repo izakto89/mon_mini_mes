@@ -32,7 +32,7 @@ def login():
             # contre votre base de données
             if username == "admin" and password == "admin":
                 st.session_state.logged_in = True
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error("Identifiants incorrects")
 
