@@ -14,8 +14,8 @@ st.set_page_config(
 # Connexion à Supabase (remplacez par vos identifiants)
 @st.cache_resource
 def init_connection():
-    url = "https://supabase.com/dashboard/project/htuushiicomwzaisupmx"
-    key = "Pelagie01,"
+    url = "https://htuushiicomwzaisupmx.supabase.co"
+    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh0dXVzaGlpY29td3phaXN1cG14Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDMyMDAzMDQsImV4cCI6MjA1ODc3NjMwNH0.mAZxwZnaEKax5UxkiZVp7dHW8CRM8d6rPktpLBpN3VU"
     return create_client(url, key)
 
 supabase = init_connection()
