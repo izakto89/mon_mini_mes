@@ -56,6 +56,39 @@ def main_menu():
         equipment_page()
     elif page == "Analyses":
         analysis_page()
+def get_all_ofs():
+    response = supabase.table("ordres_fabrication").select("*").execute()
+    data = response.data
+    if data:
+        return pd.DataFrame(data)
+    return pd.DataFrame()
+def create_new_of(new_of):
+    response = supabase.table("ordres_fabrication").insert(new_of).execute()
+    return response
+def update_of(of_id, update_data):
+    response = supabase.table("ordres_fabrication").update(update_data).eq("id", of_id).execute()
+    return response
+def delete_of(of_id):
+    response = supabase.table("ordres_fabrication").delete().eq("id", of_id).execute()
+    return response
+def get_all_operators():
+    response = supabase.table("ressources_humaines").select("*").execute()
+    data = response.data
+    if data:
+        return pd.DataFrame(data)
+    return pd.DataFrame()
+def get_all_defects():
+    response = supabase.table("defauts").select("*").execute()
+    data = response.data
+    if data:
+        return pd.DataFrame(data)
+    return pd.DataFrame()
+def get_all_equipment():
+    response = supabase.table("equipements").select("*").execute()
+    data = response.data
+    if data:
+        return pd.DataFrame(data)
+    return pd.DataFrame()
 
 # Pages de l'application
 def dashboard_page():
