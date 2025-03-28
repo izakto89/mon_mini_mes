@@ -4,3 +4,10 @@ pandas
 altair
 plotly.express
 supabase
+streamlit
+pandas
+plotly
+supabase
+pydantic
+numpy
+pytz
