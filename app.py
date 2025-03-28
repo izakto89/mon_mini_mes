@@ -94,38 +94,97 @@ def of_page():
     tab1, tab2 = st.tabs(["Liste des OF", "Nouvel OF"])
     
     with tab1:
-        # Simuler des données d'OF
-        data = {
-            'Numéro': ['OF-2023-45', 'OF-2023-46', 'OF-2023-47', 'OF-2023-48'],
-            'Poste': ['Assemblage', 'Peinture', 'Usinage', 'Contrôle'],
-            'Opérateur': ['Martin Dubois', 'Julie Bernard', 'Thomas Petit', 'Sophie Grand'],
-            'Date début': ['2023-10-15', '2023-10-16', '2023-10-16', '2023-10-17'],
-            'Statut': ['En cours', 'Planifié', 'En cours', 'Terminé'],
-            'Progression': [75, 0, 30, 100]
-        }
-        df = pd.DataFrame(data)
+        # Récupérer les données réelles
+        ofs_df = get_all_ofs()
         
-        # Filtres
-        col1, col2 = st.columns(2)
-        with col1:
-            statut_filter = st.multiselect("Filtrer par statut", df['Statut'].unique(), default=df['Statut'].unique())
-        with col2:
-            poste_filter = st.multiselect("Filtrer par poste", df['Poste'].unique(), default=df['Poste'].unique())
-        
-        filtered_df = df[(df['Statut'].isin(statut_filter)) & (df['Poste'].isin(poste_filter))]
-        
-        # Afficher le tableau avec barres de progression
-        for i, row in filtered_df.iterrows():
-            with st.expander(f"{row['Numéro']} - {row['Poste']} ({row['Statut']})"):
-                st.progress(row['Progression'] / 100)
-                st.write(f"**Opérateur:** {row['Opérateur']}")
-                st.write(f"**Date de début:** {row['Date début']}")
+        if not ofs_df.empty:
+            # Préparation des données pour l'affichage
+            if 'date_debut' in ofs_df.columns and pd.api.types.is_datetime64_any_dtype(ofs_df['date_debut']):
+                ofs_df['date_debut'] = ofs_df['date_debut'].dt.strftime('%Y-%m-%d')
+            
+            # Filtres
+            col1, col2 = st.columns(2)
+            with col1:
+                if 'statut' in ofs_df.columns:
+                    statut_filter = st.multiselect(
+                        "Filtrer par statut", 
+                        ofs_df['statut'].unique(), 
+                        default=ofs_df['statut'].unique()
+                    )
+                else:
+                    statut_filter = ["Tous"]
+            with col2:
+                if 'poste' in ofs_df.columns:
+                    poste_filter = st.multiselect(
+                        "Filtrer par poste", 
+                        ofs_df['poste'].unique(), 
+                        default=ofs_df['poste'].unique()
+                    )
+                else:
+                    poste_filter = ["Tous"]
+            
+            # Application des filtres
+            filtered_df = ofs_df
+            if 'statut' in ofs_df.columns and statut_filter != ["Tous"]:
+                filtered_df = filtered_df[filtered_df['statut'].isin(statut_filter)]
+            if 'poste' in ofs_df.columns and poste_filter != ["Tous"]:
+                filtered_df = filtered_df[filtered_df['poste'].isin(poste_filter)]
+            
+            # Tri par priorité si disponible
+            if 'priorite' in filtered_df.columns:
+                filtered_df = filtered_df.sort_values('priorite', ascending=False)
+            
+            # Afficher le tableau avec barres de progression
+            for i, row in filtered_df.iterrows():
+                of_num = row.get('numero_of', f"OF-{i}")
+                poste = row.get('poste', 'Non spécifié')
+                statut = row.get('statut', 'Non spécifié')
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.button("Modifier", key=f"mod_{i}")
-                with col2:
-                    st.button("Terminer", key=f"fin_{i}")
+                with st.expander(f"{of_num} - {poste} ({statut})"):
+                    # Progression (si disponible ou simulée)
+                    if 'progression' in row:
+                        st.progress(row['progression'] / 100)
+                    
+                    # Informations détaillées
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Opérateur:** {row.get('id_operateur', 'Non assigné')}")
+                        st.write(f"**Date de début:** {row.get('date_debut', 'Non définie')}")
+                        if 'temps_standard' in row:
+                            st.write(f"**Temps standard:** {row['temps_standard']} heures")
+                    
+                    with col2:
+                        st.write(f"**Priorité:** {row.get('priorite', 'Non définie')}")
+                        if 'date_fin' in row and pd.notna(row['date_fin']):
+                            st.write(f"**Date de fin:** {row['date_fin']}")
+                        if 'temps_reel' in row and pd.notna(row['temps_reel']):
+                            st.write(f"**Temps réel:** {row['temps_reel']} heures")
+                    
+                    # Actions
+                    action_col1, action_col2, action_col3 = st.columns(3)
+                    with action_col1:
+                        if st.button("Modifier", key=f"mod_{i}"):
+                            st.session_state.edit_of = row.get('id', i)
+                            st.rerun()
+                    
+                    with action_col2:
+                        if statut != "Terminé" and st.button("Terminer", key=f"fin_{i}"):
+                            # Mettre à jour le statut
+                            update_of(row.get('id'), {
+                                'statut': 'Terminé',
+                                'date_fin': pd.Timestamp.now(),
+                                'progression': 100
+                            })
+                            st.success(f"OF {of_num} marqué comme terminé.")
+                            st.rerun()
+                    
+                    with action_col3:
+                        if st.button("Supprimer", key=f"del_{i}"):
+                            delete_of(row.get('id'))
+                            st.success(f"OF {of_num} supprimé.")
+                            st.rerun()
+        else:
+            st.info("Aucun ordre de fabrication trouvé. Créez-en un avec l'onglet 'Nouvel OF'.")
     
     with tab2:
         with st.form("new_of_form"):
@@ -134,9 +193,20 @@ def of_page():
             col1, col2 = st.columns(2)
             with col1:
                 of_num = st.text_input("Numéro OF")
-                poste = st.selectbox("Poste", ["Assemblage", "Peinture", "Usinage", "Contrôle", "Emballage"])
+                
+                # Liste des postes depuis la base de données ou valeurs par défaut
+                postes = ["Assemblage", "Peinture", "Usinage", "Contrôle", "Emballage"]
+                poste = st.selectbox("Poste", postes)
+            
             with col2:
-                operateur = st.selectbox("Opérateur", ["Martin Dubois", "Julie Bernard", "Thomas Petit", "Sophie Grand"])
+                # Liste des opérateurs depuis la base de données
+                operators_df = get_all_operators()
+                if not operators_df.empty and 'nom' in operators_df.columns:
+                    operateurs = operators_df['nom'].tolist()
+                else:
+                    operateurs = ["Martin Dubois", "Julie Bernard", "Thomas Petit", "Sophie Grand"]
+                
+                operateur = st.selectbox("Opérateur", operateurs)
                 priorite = st.slider("Priorité", 1, 5, 3)
             
             date_debut = st.date_input("Date de début")
@@ -144,8 +214,80 @@ def of_page():
             
             submit = st.form_submit_button("Créer OF")
             if submit:
+                # Créer un nouvel OF dans la base de données
+                new_of = {
+                    'numero_of': of_num,
+                    'poste': poste,
+                    'id_operateur': operateur,
+                    'date_debut': date_debut.isoformat(),
+                    'temps_standard': temps_standard,
+                    'statut': 'Planifié',
+                    'priorite': priorite,
+                    'progression': 0
+                }
+                
+                create_new_of(new_of)
                 st.success(f"OF {of_num} créé avec succès!")
+                st.rerun()
 
+# Si un OF est en cours d'édition
+if 'edit_of' in st.session_state:
+    of_id = st.session_state.edit_of
+    # Récupérer les données de l'OF
+    of_data = supabase.table('ordres_fabrication').select('*').eq('id', of_id).execute().data
+    
+    if of_data:
+        of = of_data[0]
+        st.subheader(f"Modifier OF {of.get('numero_of')}")
+        
+        with st.form("edit_of_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                poste = st.selectbox("Poste", ["Assemblage", "Peinture", "Usinage", "Contrôle", "Emballage"], index=["Assemblage", "Peinture", "Usinage", "Contrôle", "Emballage"].index(of.get('poste', "Assemblage")))
+                
+                operators_df = get_all_operators()
+                if not operators_df.empty and 'nom' in operators_df.columns:
+                    operateurs = operators_df['nom'].tolist()
+                else:
+                    operateurs = ["Martin Dubois", "Julie Bernard", "Thomas Petit", "Sophie Grand"]
+                
+                operateur = st.selectbox("Opérateur", operateurs, index=operateurs.index(of.get('id_operateur')) if of.get('id_operateur') in operateurs else 0)
+            
+            with col2:
+                priorite = st.slider("Priorité", 1, 5, of.get('priorite', 3))
+                progression = st.slider("Progression", 0, 100, of.get('progression', 0))
+            
+            temps_standard = st.number_input("Temps standard (heures)", min_value=0.1, value=of.get('temps_standard', 1.0))
+            temps_reel = st.number_input("Temps réel (heures)", min_value=0.0, value=of.get('temps_reel', 0.0))
+            
+            statut = st.selectbox("Statut", ["Planifié", "En cours", "Terminé"], index=["Planifié", "En cours", "Terminé"].index(of.get('statut', "Planifié")))
+            
+            save = st.form_submit_button("Enregistrer")
+            if save:
+                update_data = {
+                    'poste': poste,
+                    'id_operateur': operateur,
+                    'priorite': priorite,
+                    'progression': progression,
+                    'temps_standard': temps_standard,
+                    'temps_reel': temps_reel,
+                    'statut': statut,
+                }
+                
+                # Si l'OF est marqué comme terminé, ajouter la date de fin
+                if statut == "Terminé" and of.get('statut') != "Terminé":
+                    update_data['date_fin'] = pd.Timestamp.now().isoformat()
+                
+                update_of(of_id, update_data)
+                st.success(f"OF {of.get('numero_of')} mis à jour avec succès!")
+                
+                # Réinitialiser l'état d'édition et rafraîchir
+                del st.session_state.edit_of
+                st.rerun()
+        
+        if st.button("Annuler"):
+            del st.session_state.edit_of
+            st.rerun()
 def rh_page():
     st.title("Gestion des Ressources Humaines")
     st.write("Cette page permettra de gérer les opérateurs, leurs compétences et présences.")
@@ -313,7 +455,87 @@ def analysis_page():
             st.info("Simulation en cours... Cette fonctionnalité sera implémentée dans une version future.")
             st.metric("Impact sur les délais", "+2 jours")
             st.metric("Taux d'occupation", "92%", "+14%")
+def add_exports_to_sidebar():
+    with st.sidebar.expander("Exporter des données"):
+        export_type = st.selectbox(
+            "Type de données à exporter",
+            ["Ordres de fabrication", "Ressources humaines", "Qualité", "Équipements"]
+        )
+        
+        date_range = st.date_input(
+            "Période (optionnel)",
+            value=(datetime.datetime.now() - datetime.timedelta(days=30), datetime.datetime.now()),
+            help="Laissez vide pour tout exporter"
+        )
+        
+        if st.button("Exporter en CSV"):
+            # Récupérer les données selon le type
+            if export_type == "Ordres de fabrication":
+                data = get_all_ofs()
+                filename = "ordres_fabrication.csv"
+            elif export_type == "Ressources humaines":
+                data = get_all_operators()
+                filename = "ressources_humaines.csv"
+            elif export_type == "Qualité":
+                data = get_all_defects()
+                filename = "qualite.csv"
+            else:  # Équipements
+                data = get_all_equipment()
+                filename = "equipements.csv"
+            
+            # Filtrer par date si applicable
+            if not data.empty and 'date_debut' in data.columns:
+                start_date, end_date = date_range
+                data = data[(data['date_debut'] >= pd.Timestamp(start_date)) & 
+                           (data['date_debut'] <= pd.Timestamp(end_date))]
+            
+            # Vérifier si des données existent
+            if not data.empty:
+                # Convertir en CSV
+                csv = data.to_csv(index=False)
+                
+                # Bouton de téléchargement
+                st.download_button(
+                    label="Télécharger CSV",
+                    data=csv,
+                    file_name=filename,
+                    mime='text/csv',
+                )
+            else:
+                st.error("Aucune donnée disponible pour cette sélection")
 
+# Ajoutez ceci à votre fonction main_menu
+def main_menu():
+    st.sidebar.title("Menu")
+    page = st.sidebar.selectbox(
+        "Navigation",
+        ["Tableau de bord", "Ordres de fabrication", "Ressources humaines", "Qualité", "Équipements", "Analyses"]
+    )
+    
+    # Ajouter les exports
+    add_exports_to_sidebar()
+    
+    # Afficher l'utilisateur connecté
+    if "user" in st.session_state:
+        st.sidebar.write(f"Connecté en tant que: **{st.session_state.user['username']}**")
+        if st.sidebar.button("Déconnexion"):
+            st.session_state.logged_in = False
+            st.session_state.pop("user", None)
+            st.rerun()
+    
+    # Afficher la page sélectionnée
+    if page == "Tableau de bord":
+        dashboard_page()
+    elif page == "Ordres de fabrication":
+        of_page()
+    elif page == "Ressources humaines":
+        rh_page()
+    elif page == "Qualité":
+        quality_page()
+    elif page == "Équipements":
+        equipment_page()
+    elif page == "Analyses":
+        analysis_page()
 # Application principale
 def main():
     if "logged_in" not in st.session_state:
